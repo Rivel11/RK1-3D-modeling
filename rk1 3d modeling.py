@@ -1,115 +1,181 @@
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.patches import Polygon
+import matplotlib.pyplot as plt
+import math
 from matplotlib.image import imread
+from skimage.transform import resize
 
-A = (60, 130)
-A_ = (56, 133)
-B = (100, 50)
-B_ = (100, 45)
-C = (140, 130)
-C_ = (144, 133)
-O = (100, 100)
-r = 20
-r_ = 17
-R = 90
+width, height = 1000, 1000
+canvas = np.ones((height, width, 3), dtype=np.float32)
 
-def rotate_180(points, center=(100, 100)):
-    cx, cy = center
-    rotated = []
-    for x, y in points:
-        x_new = 2 * cx - x
-        y_new = 2 * cy - y
-        rotated.append((x_new, y_new))
-    return rotated
+def put_pixel(x, y, color=(0, 0, 0), thickness=2):
+    for dx in range(-thickness, thickness + 1):
+        for dy in range(-thickness, thickness + 1):
+            xx, yy = x + dx, y + dy
+            if 0 <= xx < width and 0 <= yy < height:
+                canvas[height - 1 - yy, xx] = color
 
-A, B, C, A_, B_, C_ = rotate_180([A, B, C, A_, B_, C_])
+def bresenham_line(x1, y1, x2, y2, color=(0, 0, 0), thickness=2, mask_hide=None):
+    dx, dy = abs(x2 - x1), abs(y2 - y1)
+    sx, sy = (1 if x1 < x2 else -1), (1 if y1 < y2 else -1)
+    err = dx - dy
+    while True:
+        if 0 <= x1 < width and 0 <= y1 < height:
+            if mask_hide is None or not mask_hide[height - 1 - y1, x1]:
+                put_pixel(x1, y1, color, thickness)
+        if x1 == x2 and y1 == y2:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x1 += sx
+        if e2 < dx:
+            err += dx
+            y1 += sy
 
-fig, ax = plt.subplots(figsize=(6, 6))
-ax.set_aspect('equal')
-ax.set_xlim(0, 200)
-ax.set_ylim(0, 200)
-ax.axis('off')
+def bresenham_circle(xc, yc, r, color=(0, 0, 0), thickness=2):
+    x, y = 0, r
+    d = 3 - 2 * r
+    while y >= x:
+        for dx, dy in [(x, y), (y, x), (-x, y), (-y, x),
+                       (x, -y), (y, -x), (-x, -y), (-y, -x)]:
+            put_pixel(xc + dx, yc + dy, color, thickness)
+        x += 1
+        if d > 0:
+            y -= 1
+            d += 4 * (x - y) + 10
+        else:
+            d += 4 * x + 6
+
+def rotate_point(x, y, cx, cy, angle_deg):
+    angle = math.radians(angle_deg)
+    x_new = cx + (x - cx) * math.cos(angle) - (y - cy) * math.sin(angle)
+    y_new = cy + (x - cx) * math.sin(angle) + (y - cy) * math.cos(angle)
+    return int(round(x_new)), int(round(y_new))
+
+def point_in_triangle(px, py, A, B, C):
+    x1, y1 = A
+    x2, y2 = B
+    x3, y3 = C
+    denom = (y2 - y3)*(x1 - x3) + (x3 - x2)*(y1 - y3)
+    a = ((y2 - y3)*(px - x3) + (x3 - x2)*(py - y3)) / denom
+    b = ((y3 - y1)*(px - x3) + (x1 - x3)*(py - y3)) / denom
+    c = 1 - a - b
+    return (0 <= a <= 1) and (0 <= b <= 1) and (0 <= c <= 1)
+
+def expand_triangle(A, B, C, scale=1.12):
+    cx = (A[0] + B[0] + C[0]) / 3
+    cy = (A[1] + B[1] + C[1]) / 3
+    def scale_point(p):
+        x, y = p
+        return (int(cx + (x - cx) * scale), int(cy + (y - cy) * scale))
+    return scale_point(A), scale_point(B), scale_point(C)
+
+def cyrus_beck_clip(p1, p2, polygon):
+    x1, y1 = p1
+    x2, y2 = p2
+    dx, dy = x2 - x1, y2 - y1
+    t_enter, t_exit = 0, 1
+    n = len(polygon)
+    for i in range(n):
+        xA, yA = polygon[i]
+        xB, yB = polygon[(i + 1) % n]
+        nx, ny = yA - yB, xB - xA
+        wx, wy = x1 - xA, y1 - yA
+        DdotN = dx * nx + dy * ny
+        WdotN = wx * nx + wy * ny
+        if DdotN == 0:
+            if WdotN < 0:
+                return None
+            else:
+                continue
+        t = -WdotN / DdotN
+        if DdotN > 0:
+            t_enter = max(t_enter, t)
+        else:
+            t_exit = min(t_exit, t)
+        if t_enter > t_exit:
+            return None
+    if t_enter > 1 or t_exit < 0:
+        return None
+    return t_enter, t_exit
+
+A = (300, 650)
+B = (500, 300)
+C = (700, 650)
+O = (500, 500)
+r, r_, R = 85, 70, 350
+A, B, C = [rotate_point(x, y, O[0], O[1], 180) for (x, y) in [A, B, C]]
+A_, B_, C_ = expand_triangle(A, B, C, scale=1.12)
 
 image_path = r"C:\Users\hitec\Downloads\фокус_камеры_pechenochnica-pereleska-2241.jpg"
 try:
     img = imread(image_path)
-    triangle = Polygon([A, B, C], closed=True, facecolor='white', edgecolor='none', zorder=2.5)
-    ax.add_patch(triangle)
-
-    ax.imshow(
-        img,
-        extent=[0, 200, 0, 200],
-        clip_path=triangle,
-        clip_on=True,
-        zorder=3
-    )
+    if img.dtype != np.uint8 and img.max() > 1.0:
+        img = img / 255.0
+    img_resized = resize(img, (height, width), anti_aliasing=True)
+    mask = np.zeros((height, width), dtype=bool)
+    for x in range(width):
+        for y in range(height):
+            if point_in_triangle(x, y, A, B, C):
+                dist = math.sqrt((x - O[0])**2 + (y - O[1])**2)
+                if dist > r:
+                    mask[height - 1 - y, x] = True
+    canvas[mask] = img_resized[mask]
 except FileNotFoundError:
-    print(f"Картинка '{image_path}' не найдена, фон треугольника пропущен.")
+    print(f"нет картинки")
 
-def draw_triangle(points, **kwargs):
-    x, y = zip(*points)
-    x += (x[0],)
-    y += (y[0],)
-    ax.plot(x, y, **kwargs)
+bresenham_line(*A, *B, thickness=3)
+bresenham_line(*B, *C, thickness=3)
+bresenham_line(*C, *A, thickness=3)
 
-draw_triangle([A, B, C], color='black', linewidth=2)
+def dashed_line(p1, p2, dash_len=60, gap_len=20):
+    x1, y1 = p1
+    x2, y2 = p2
+    dx, dy = x2 - x1, y2 - y1
+    length = math.hypot(dx, dy)
+    pos = 0.0
+    while pos < length:
+        end = min(pos + dash_len, length)
+        t1 = pos / length
+        t2 = end / length
+        x_start = int(x1 + dx * t1)
+        y_start = int(y1 + dy * t1)
+        x_end = int(x1 + dx * t2)
+        y_end = int(y1 + dy * t2)
+        bresenham_line(x_start, y_start, x_end, y_end, thickness=2)
+        pos += dash_len + gap_len
 
-dash_pattern = (0, (6, 5))
-draw_triangle([A_, B_, C_], color='black', linestyle=dash_pattern, linewidth=1.5)
+dashed_line(A_, B_)
+dashed_line(B_, C_)
+dashed_line(C_, A_)
 
-circle_small_bg = plt.Circle(O, r_, color='white', zorder=2.7)
-ax.add_artist(circle_small_bg)
+for angle in range(0, 360, 60):
+    for a in np.linspace(angle, angle + 30, 300):
+        x = int(O[0] + r_ * math.cos(math.radians(a)))
+        y = int(O[1] + r_ * math.sin(math.radians(a)))
+        put_pixel(x, y, thickness=2)
 
-for angle in np.arange(0, 360, 60):
-    theta = np.radians(np.linspace(angle, angle + 30, 100))
-    x_small = O[0] + r_ * np.cos(theta)
-    y_small = O[1] + r_ * np.sin(theta)
-    ax.plot(x_small, y_small, color='black', linewidth=1.2, zorder=3.2)
+bresenham_circle(O[0], O[1], r, thickness=2)
 
-circle_outer_bg = plt.Circle(O, r, color='white', zorder=2.7)
-ax.add_artist(circle_outer_bg)
+for a in np.linspace(-50, 180, 600):
+    x = int(O[0] + R * math.cos(math.radians(a + 180)))
+    y = int(O[1] + R * math.sin(math.radians(a + 180)))
+    put_pixel(x, y, thickness=2)
 
-circle_inner_fill = plt.Circle(O, r, color='white', zorder=3.1)
-ax.add_artist(circle_inner_fill)
+axis_start = (80, 700)
+axis_end = (950, 475)
+clip = cyrus_beck_clip(axis_start, axis_end, [A, B, C])
+if clip:
+    t_in, t_out = clip
+    dx, dy = axis_end[0] - axis_start[0], axis_end[1] - axis_start[1]
+    enter_point = (int(axis_start[0] + dx * t_in), int(axis_start[1] + dy * t_in))
+    exit_point = (int(axis_start[0] + dx * t_out), int(axis_start[1] + dy * t_out))
+    bresenham_line(axis_start[0], axis_start[1], enter_point[0], enter_point[1], thickness=2)
+    bresenham_line(exit_point[0], exit_point[1], axis_end[0], axis_end[1], thickness=2)
+else:
+    bresenham_line(*axis_start, *axis_end, thickness=2)
 
-circle_outer = plt.Circle(O, r, color='black', fill=False, linewidth=1.5, zorder=3.2)
-ax.add_artist(circle_outer)
-
-theta = np.linspace(-np.pi / 6, np.pi, 200)
-x_arc = O[0] + R * np.cos(theta + np.pi)
-y_arc = O[1] + R * np.sin(theta + np.pi)
-ax.plot(x_arc, y_arc, color='black', linewidth=1.5, zorder=4)
-
-start = np.array([0, 140])
-end = np.array([200, 97])
-
-ax.plot([start[0], end[0]], [start[1], end[1]], color='black', linewidth=1, zorder=0)
-
-arrow_length = 6
-arrow_angle = np.deg2rad(20)
-
-dx, dy = end - start
-angle = np.arctan2(dy, dx)
-
-arrow_x = [
-    end[0],
-    end[0] - arrow_length * np.cos(angle - arrow_angle),
-    end[0] - arrow_length * np.cos(angle + arrow_angle),
-    end[0]
-]
-arrow_y = [
-    end[1],
-    end[1] - arrow_length * np.sin(angle - arrow_angle),
-    end[1] - arrow_length * np.sin(angle + arrow_angle),
-    end[1]
-]
-ax.fill(arrow_x, arrow_y, color='black', zorder=0)
-
-ax.text(end[0] + 3, end[1], 'Y', fontsize=10, zorder=0)
-ax.text(start[0] - 5, start[1], 'X', fontsize=10, zorder=0)
-
-ax.set_facecolor('white')
-fig.patch.set_facecolor('white')
-
+plt.figure(figsize=(10, 10))
+plt.imshow(canvas)
+plt.axis("off")
 plt.show()
